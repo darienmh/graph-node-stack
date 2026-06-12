@@ -1,13 +1,18 @@
 # graph-node-stack
 
 Self-hosted [graph-node](https://github.com/graphprotocol/graph-node) indexer stack
-for Polygon (matic), behind Traefik with automatic TLS. Everything server-specific
+for **any EVM chain**, behind Traefik with automatic TLS. Everything server-specific
 lives in `.env`, so the same files deploy unchanged to any box.
 
 This is the configuration distilled from a live deployment: a single parametrised
 `docker-compose.yml` (no override files), Postgres tuned via env vars, a small
 nginx RPC load-balancer, an API-key forwardAuth gate, and a Traefik front with
 Cloudflare DNS-01 certificates.
+
+`graph-node` itself supports any EVM network (Ethereum, Polygon, BSC, Arbitrum,
+Base, Optimism, …). The included `config.toml` ships configured for **Polygon
+(`matic`)** as a worked example — point it at a different chain by editing one
+line plus the RPCs (see [Using a different chain](#using-a-different-chain)).
 
 ## Architecture
 
@@ -42,7 +47,7 @@ going through Traefik.
 ```
 .
 ├── docker-compose.yml        # graph-node stack (parametrised via .env)
-├── config.toml               # graph-node config (matic, single rpc-lb provider)
+├── config.toml               # graph-node config (chain name + single rpc-lb provider)
 ├── auth.py                   # forwardAuth: validates X-Api-Key / Bearer / Basic
 ├── rpc-lb/
 │   └── default.conf.template # nginx round-robin over RPC_1/2/3 (envsubst at start)
@@ -59,9 +64,10 @@ going through Traefik.
 
 - Docker + Docker Compose v2
 - A Cloudflare-managed domain (for DNS-01 certs and the public hostnames)
-- 3 Polygon RPC endpoints (e.g. Chainstack)
-- Disk: budget **200 GB+**. The Postgres `chain1` block/eth_call cache grows
-  toward ~190 GB over time. On a small disk, enable pruning (see below).
+- 3 RPC endpoints for your target chain (e.g. Chainstack, Alchemy, Infura)
+- Disk: budget for the chain's block/eth_call cache. graph-node's `chain1` schema
+  grows with the indexed range — busy chains reach hundreds of GB over time. On a
+  small disk, enable pruning (see below).
 
 ## Deploy
 
@@ -107,6 +113,35 @@ https://graph.<domain>/subgraphs/id/<DEPLOYMENT_ID>
 `graph-status.<domain>` is public (read-only index status). `graph-admin` and the
 IPFS add endpoint require an API key.
 
+## Using a different chain
+
+The stack works with any EVM network; only two things are chain-specific.
+
+1. **RPCs** — set `RPC_1/2/3` in `.env` to endpoints for your chain. `rpc-lb`
+   round-robins across them; graph-node only sees `http://rpc-lb:8545`.
+
+2. **Chain name in `config.toml`** — change the `[chains.<name>]` section. This
+   name is **not arbitrary**: it must match the `network:` field in the manifest
+   (`subgraph.yaml`) of the subgraph you deploy. graph-node uses it to map the
+   subgraph to its RPC provider.
+
+   ```toml
+   [chains.matic]          # Polygon. Rename to your chain, e.g. [chains.mainnet]
+   shard = "primary"
+   provider = [ { label = "rpc-lb", url = "http://rpc-lb:8545", features = [] } ]
+   ```
+
+   Common names: `mainnet` (Ethereum), `matic` (Polygon), `bsc`, `arbitrum-one`,
+   `base`, `optimism`. Use whatever your subgraph's manifest declares.
+
+   > Note: graph-node interpolates `${VAR}` into TOML *values* (the connection
+   > string, provider URLs) but not into section *headers*, so the chain name
+   > can't be an env var — edit it directly, or template `config.toml` with
+   > `envsubst` if you need it env-driven.
+
+Nothing else changes: Postgres, IPFS, the rpc-lb pattern, auth and Traefik are
+chain-agnostic.
+
 ## Restoring an existing subgraph (optional)
 
 To start already-synced from a logical copy (dump without the `chain1` cache +
@@ -140,7 +175,8 @@ converge to identical entities.
   error `9109`.
 - **File descriptors.** `graph-node` and `postgres` set `nofile` to 65536 to avoid
   "Too many open files" under load.
-- **Block-cache pruning.** When `chain1` grows large, truncate it:
+- **Block-cache pruning.** When `chain1` grows large, truncate it (replace `matic`
+  with your chain name):
   ```bash
   docker exec graph-node graphman --config /etc/graph-node/config.toml chain truncate matic
   ```
