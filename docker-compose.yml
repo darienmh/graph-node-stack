@@ -1,0 +1,152 @@
+# gmix-indexer — graph-node stack (single file, parametrised via .env).
+#
+# Every server-specific value lives in .env so this same file deploys unchanged
+# to any box:
+#   - Postgres tuning   -> PG_* vars   (defaults below suit a small ~7.6 GB host;
+#                                        raise them on bigger servers)
+#   - Public hostnames  -> GRAPH_HOST_* vars (Traefik routers)
+#
+# Endpoints are bound to 127.0.0.1 (reach via SSH tunnel) AND published through
+# Traefik (cloudflare cert resolver) on the external `proxy` network.
+# Multi-RPC (3 Chainstack) via rpc-lb round-robin; tokens in .env (RPC_1/2/3).
+networks:
+  graph:
+  proxy:
+    external: true
+
+volumes:
+  graph_pg:
+  graph_ipfs:
+
+services:
+  graph-node:
+    image: graphprotocol/graph-node:v0.43.0
+    container_name: graph-node
+    restart: unless-stopped
+    # graph-node opens many FDs (DB pool + RPC keepalives + index-node/metrics
+    # accept). Docker's default soft limit of 1024 causes "Too many open files".
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    depends_on:
+      - postgres
+      - ipfs
+      - rpc-lb
+    env_file: .env
+    environment:
+      ipfs: "ipfs:5001"
+      GRAPH_NODE_CONFIG: /etc/graph-node/config.toml
+      GRAPH_LOG: info
+    volumes:
+      - ./config.toml:/etc/graph-node/config.toml:ro
+    ports:
+      - "127.0.0.1:8000:8000"   # GraphQL query   (tunnel)
+      - "127.0.0.1:8001:8001"   # GraphQL ws subs (tunnel)
+      - "127.0.0.1:8020:8020"   # admin JSON-RPC  (deploy via tunnel)
+      - "127.0.0.1:8030:8030"   # index-status
+      - "127.0.0.1:8040:8040"   # prometheus metrics
+    networks:
+      - graph
+      - proxy
+    labels:
+      - traefik.enable=true
+      # query (:8000) — behind API key
+      - "traefik.http.routers.graphql.rule=Host(`${GRAPH_HOST_QUERY}`)"
+      - traefik.http.routers.graphql.entrypoints=websecure
+      - traefik.http.routers.graphql.tls.certresolver=cloudflare
+      - traefik.http.routers.graphql.service=graphql
+      - traefik.http.services.graphql.loadbalancer.server.port=8000
+      - traefik.http.routers.graphql.middlewares=graph-apikey@file
+      # admin (:8020) — behind API key
+      - "traefik.http.routers.graphadmin.rule=Host(`${GRAPH_HOST_ADMIN}`)"
+      - traefik.http.routers.graphadmin.entrypoints=websecure
+      - traefik.http.routers.graphadmin.tls.certresolver=cloudflare
+      - traefik.http.routers.graphadmin.service=graphadmin
+      - traefik.http.services.graphadmin.loadbalancer.server.port=8020
+      - traefik.http.routers.graphadmin.middlewares=graph-apikey@file
+      # index-status (:8030) — public, read-only
+      - "traefik.http.routers.graphstatus.rule=Host(`${GRAPH_HOST_STATUS}`)"
+      - traefik.http.routers.graphstatus.entrypoints=websecure
+      - traefik.http.routers.graphstatus.tls.certresolver=cloudflare
+      - traefik.http.routers.graphstatus.service=graphstatus
+      - traefik.http.services.graphstatus.loadbalancer.server.port=8030
+
+  graph-auth:
+    image: python:3.12-alpine
+    container_name: graph-auth
+    restart: unless-stopped
+    command: python /app/auth.py
+    env_file: .env
+    volumes:
+      - ./auth.py:/app/auth.py:ro
+    networks:
+      - proxy
+
+  rpc-lb:
+    image: nginx:alpine
+    container_name: graph-rpc-lb
+    restart: unless-stopped
+    env_file: .env            # RPC_1 / RPC_2 / RPC_3 for envsubst
+    volumes:
+      - ./rpc-lb/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks:
+      - graph
+
+  ipfs:
+    image: ipfs/kubo:v0.34.1
+    container_name: graph-ipfs
+    restart: unless-stopped
+    command: ["daemon", "--migrate=true", "--agent-version-suffix=docker", "--enable-gc"]
+    ports:
+      - "127.0.0.1:5001:5001"
+    volumes:
+      - graph_ipfs:/data/ipfs
+    networks:
+      - graph
+      - proxy
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.graphipfs.rule=Host(`${GRAPH_HOST_IPFS}`) && (PathPrefix(`/api/v0/add`) || PathPrefix(`/api/v0/version`) || PathPrefix(`/api/v0/id`))"
+      - traefik.http.routers.graphipfs.entrypoints=websecure
+      - traefik.http.routers.graphipfs.tls.certresolver=cloudflare
+      - traefik.http.routers.graphipfs.service=graphipfs
+      - traefik.http.services.graphipfs.loadbalancer.server.port=5001
+      - traefik.http.routers.graphipfs.middlewares=graph-apikey@file
+
+  postgres:
+    image: postgres:16
+    container_name: graph-postgres
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # Tuning is driven by PG_* in .env. Defaults below are sized for a ~7.6 GB
+    # box, write-heavy indexing workload. On a bigger server, raise in .env:
+    # shared_buffers ~= 25% RAM, effective_cache_size ~= 50-75% RAM.
+    command:
+      - postgres
+      - -cshared_preload_libraries=pg_stat_statements
+      - -cmax_connections=${PG_MAX_CONNECTIONS:-50}
+      - -cshared_buffers=${PG_SHARED_BUFFERS:-1536MB}
+      - -ceffective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -cwork_mem=${PG_WORK_MEM:-32MB}
+      - -cmaintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-512MB}
+      - -cmax_wal_size=${PG_MAX_WAL_SIZE:-4GB}
+      - -cmin_wal_size=${PG_MIN_WAL_SIZE:-1GB}
+      - -ccheckpoint_completion_target=0.9
+      - -crandom_page_cost=1.1
+      - -ceffective_io_concurrency=200
+      - -cwal_compression=on
+    environment:
+      POSTGRES_USER: graph-node
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: graph-node
+      PGDATA: /var/lib/postgresql/data
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    volumes:
+      - graph_pg:/var/lib/postgresql/data
+    shm_size: ${PG_SHM_SIZE:-512m}
+    networks:
+      - graph

@@ -1,0 +1,40 @@
+api:
+  dashboard: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: proxy
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  cloudflare:
+    acme:
+      email: darienmh@gmail.com
+      storage: /acme.json
+      dnsChallenge:
+        provider: cloudflare
+        propagation:
+          delayBeforeChecks: 30s
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+
+log:
+  level: INFO
+accessLog: {}

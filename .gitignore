@@ -1,0 +1,18 @@
+# Secrets — never commit real env files
+.env
+*/.env
+.env.local
+.env.*.local
+
+# Traefik ACME storage (contains issued certs / account key)
+traefik/acme.json
+acme.json
+
+# DB / IPFS restore bundles (large, may contain data)
+restore/
+*.dump
+*.tar.gz
+
+# OS / editor cruft
+.DS_Store
+*.swp

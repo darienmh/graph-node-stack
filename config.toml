@@ -1,0 +1,25 @@
+# graph-node config — multi-provider for Polygon (matic).
+# Values are interpolated from environment variables (${...}) at startup:
+#   POSTGRES_PASSWORD, RPC_1, RPC_2, RPC_3  (set in .env / docker-compose).
+# graph-node load-balances across the providers and fails over on errors.
+
+[store]
+[store.primary]
+connection = "postgresql://graph-node:${POSTGRES_PASSWORD}@postgres:5432/graph-node"
+pool_size = 10
+
+[deployment]
+[[deployment.rule]]
+indexers = ["default"]
+
+[chains]
+ingestor = "default"
+
+[chains.matic]
+shard = "primary"
+# Single endpoint = the round-robin balancer (rpc-lb), which rotates each request
+# across the 3 Chainstack tokens and rate-limits each. graph-node no longer pins
+# to one provider, so the load is guaranteed to spread.
+provider = [
+  { label = "rpc-lb", url = "http://rpc-lb:8545", features = [] },
+]

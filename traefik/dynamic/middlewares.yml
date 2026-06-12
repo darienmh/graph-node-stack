@@ -1,0 +1,7 @@
+http:
+  middlewares:
+    # forwardAuth -> graph-auth (auth.py) validates X-Api-Key / Bearer / Basic
+    # against API_KEYS. 2xx allows the request, 401 denies it.
+    graph-apikey:
+      forwardAuth:
+        address: "http://graph-auth:8080"

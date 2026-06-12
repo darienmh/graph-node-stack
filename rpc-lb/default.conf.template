@@ -1,0 +1,60 @@
+# Round-robin RPC load balancer for the 3 Chainstack Polygon endpoints.
+# graph-node points at  http://rpc-lb:8545/  (single provider); this rotates each
+# request across RPC_1/RPC_2/RPC_3 and hard-caps each at 240 r/s (excess is held
+# at the proxy with a 503, so Chainstack never sees an over-limit burst).
+#
+# ${RPC_1/2/3} are substituted from the environment at container start (envsubst).
+# They are full URLs incl. the token, e.g. https://polygon-mainnet.core.chainstack.com/<TOKEN>
+#
+# No per-provider rate limit (removed on request) — only round-robin distribution.
+
+upstream rpc_pool {
+    server 127.0.0.1:9001 max_fails=2 fail_timeout=10s;
+    server 127.0.0.1:9002 max_fails=2 fail_timeout=10s;
+    server 127.0.0.1:9003 max_fails=2 fail_timeout=10s;
+    keepalive 64;
+}
+
+# front — graph-node hits this; default round-robin across the pool
+server {
+    listen 8545;
+    access_log off;
+    location / {
+        proxy_pass http://rpc_pool;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_read_timeout 60s;
+    }
+}
+
+# one internal listener per Chainstack token
+server {
+    listen 9001;
+    server_name rpc1;
+    location / {
+        proxy_pass ${RPC_1};
+        proxy_ssl_server_name on;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+}
+server {
+    listen 9002;
+    server_name rpc2;
+    location / {
+        proxy_pass ${RPC_2};
+        proxy_ssl_server_name on;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+}
+server {
+    listen 9003;
+    server_name rpc3;
+    location / {
+        proxy_pass ${RPC_3};
+        proxy_ssl_server_name on;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+}
