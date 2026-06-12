@@ -21,7 +21,7 @@ Cloudflare DNS-01 certificates.
    │ graph-node  │──►│ postgres │   │   ipfs   │   │  rpc-lb  │   │ graph-auth │
    │  v0.43.0    │   │    16    │   │  kubo    │   │  nginx   │   │ forwardAuth│
    └──────┬──────┘   └──────────┘   └──────────┘   └────┬─────┘   └────────────┘
-          │                                              │
+          │                                             │
           └── single provider http://rpc-lb:8545 ───────┘── round-robin ► RPC_1/2/3
 ```
 
