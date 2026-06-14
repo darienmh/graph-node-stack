@@ -66,8 +66,8 @@ going through Traefik.
 - A Cloudflare-managed domain (for DNS-01 certs and the public hostnames)
 - 3 RPC endpoints for your target chain (e.g. Chainstack, Alchemy, Infura)
 - Disk: budget for the chain's block/eth_call cache. graph-node's `chain1` schema
-  grows with the indexed range — busy chains reach hundreds of GB over time. On a
-  small disk, enable pruning (see below).
+  grows with the indexed range — busy chains reach hundreds of GB over time.
+  Automatic block-cache pruning is enabled by default (see [Notes](#notes)).
 
 ## Deploy
 
@@ -175,11 +175,25 @@ converge to identical entities.
   error `9109`.
 - **File descriptors.** `graph-node` and `postgres` set `nofile` to 65536 to avoid
   "Too many open files" under load.
-- **Block-cache pruning.** When `chain1` grows large, truncate it (replace `matic`
-  with your chain name):
-  ```bash
-  docker exec graph-node graphman --config /etc/graph-node/config.toml chain truncate matic
-  ```
+- **Block-cache pruning.** The block cache (`chain1.blocks`) grows unbounded — on
+  a busy chain like Polygon it adds ~17 GB/day and eventually fills the disk,
+  which crashes Postgres (`Store error: database unavailable`). Two independent
+  controls, both safe with a single shard (the default):
+  - **Cap growth (enabled by default):** `GRAPH_ETHEREUM_CLEANUP_BLOCKS: "true"`
+    in `docker-compose.yml` makes graph-node delete blocks it no longer needs.
+    Because it uses `DELETE`, it *bounds* the cache but does **not** shrink the
+    files already on disk — the freed space is reused internally by Postgres.
+  - **Reclaim disk now:** to actually return space to the OS, `TRUNCATE` the cache
+    (instant; graph-node re-fetches recent blocks from the RPC). Replace `matic`
+    with your chain name:
+    ```bash
+    docker compose run --rm --no-deps --entrypoint graphman \
+      graph-node --config /etc/graph-node/config.toml chain truncate matic --force
+    ```
+    Run this once on an already-bloated deployment (or whenever you need free
+    space); the automatic cleanup keeps it bounded afterwards. For a clean
+    truncate without write contention, `docker stop graph-node` first, then
+    `docker compose up -d graph-node` after.
 - **Monitoring.** Pair with a status dashboard reading `:8030` (index status) and
   `:8040` (Prometheus metrics).
 

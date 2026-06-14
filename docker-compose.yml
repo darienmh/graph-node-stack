@@ -38,6 +38,12 @@ services:
       ipfs: "ipfs:5001"
       GRAPH_NODE_CONFIG: /etc/graph-node/config.toml
       GRAPH_LOG: info
+      # Auto-prune the Ethereum block cache (chain1.blocks). Without this the
+      # cache grows unbounded (~17 GB/day on Polygon) and eventually fills the
+      # disk, putting Postgres into a restart loop -> "Store error: database
+      # unavailable". Safe here because the store uses a single shard (primary);
+      # graph-node re-fetches recent blocks from the RPC as needed.
+      GRAPH_ETHEREUM_CLEANUP_BLOCKS: "true"
     volumes:
       - ./config.toml:/etc/graph-node/config.toml:ro
     ports:
